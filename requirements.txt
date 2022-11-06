@@ -1,0 +1,10 @@
+SQLAlchemy~=1.4.42
+alembic~=1.8.1
+fastapi~=0.86.0
+pydantic~=1.10.2
+passlib~=1.7.4
+python-jose
+uvicorn
+python-multipart
+passlib[bcrypt]
+psycopg2
