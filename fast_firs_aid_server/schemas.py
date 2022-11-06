@@ -41,7 +41,6 @@ class UserCreate(UserBase):
 
 class User(UserBase):
     id: int
-    is_active: bool
     items: list[Item] = []
     disabled: Union[bool, None] = None
 
