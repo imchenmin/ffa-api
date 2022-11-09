@@ -1,4 +1,7 @@
-from sqlalchemy.orm import Session
+from datetime import timedelta, datetime
+
+from sqlalchemy.orm import Session, aliased
+from sqlalchemy import func, desc
 
 from fast_firs_aid_server import models, schemas, mypassword
 
@@ -55,5 +58,37 @@ def create_aid_item_response_item(db: Session, response_item: schemas.ResponseIt
     db.refresh(db_item)
     return db_item
 
+
 def get_aid_items_by_initiator_id(db: Session, initiator_id: int, skip: int = 0, limit: int = 100):
     return db.query(models.AidItem).filter(models.AidItem.initiator_id == initiator_id).all()
+
+
+def create_location_item(db: Session, user: schemas.User, lon: float, lat:float):
+    db_location = models.LocationItem(user_id=user.id,lon=lon, lat=lat)
+    db.add(db_location)
+    db.commit()
+    db.refresh(db_location)
+    return db_location
+
+"""
+查询地理位置，获取一定时间内的用户的位置信息。每一个用户只显示一个
+"""
+def get_unique_users_location(db: Session, time_delta=5):
+    # 也不知道怎么写的
+    rownb = func.row_number().over(order_by=models.LocationItem.time_created.desc()
+                                   , partition_by=models.LocationItem.user_id)
+    rownb = rownb.label('rownb')
+
+    subq = db.query(models.LocationItem, rownb)  # add interesting filters here
+
+    subq = subq.subquery(name="subq", with_labels=True)
+    return db.query(aliased(models.LocationItem, alias=subq)).filter(subq.c.rownb == 1)\
+        .filter(models.LocationItem.time_created >= datetime.utcnow() - timedelta(minutes=time_delta))\
+        .all()
+    # return db.query(models.LocationItem)\
+    #     .filter(models.LocationItem.time_created >= datetime.utcnow() - timedelta(minutes=time_delta))\
+    #     .group_by(models.LocationItem.user_id)\
+    #     .order_by(models.LocationItem.time_created).all()
+
+def get_all_user_location(db: Session):
+    return db.query(models.LocationItem).order_by(models.LocationItem.time_created).limit(20).all()

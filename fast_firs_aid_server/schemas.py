@@ -82,3 +82,15 @@ class AidItem(AidItemBase):
 
     class Config:
         orm_mode = True
+
+
+class LocationItem(BaseModel):
+    id: int
+    user_id: int
+    lon: float
+    lat: float
+
+    time_created: datetime.datetime
+
+    class Config:
+        orm_mode = True

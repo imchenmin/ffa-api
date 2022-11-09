@@ -1,7 +1,7 @@
 import datetime
 from enum import Enum
 
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, DateTime
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, DateTime, Float, func
 from sqlalchemy.orm import relationship
 from fast_firs_aid_server.database import Base
 
@@ -61,4 +61,19 @@ class AidItem(Base):
     initiator_id = Column(Integer, ForeignKey("users.id"))
     # initiator = relationship("User", back_populates="aid_items")
     response_items = relationship("ResponseItem",back_populates="aid_item")
+
+"""
+权宜数据表示
+"""
+class LocationItem(Base):
+    __tablename__ = "location_items"
+
+    id = Column(Integer, primary_key=True, index=True,autoincrement=True)
+
+    user_id = Column(Integer, ForeignKey("users.id"))
+    lon = Column(Float, index=True)
+    lat = Column(Float, index=True)
+
+    time_created = Column(DateTime(timezone=True), default=datetime.datetime.utcnow)
+
 

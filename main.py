@@ -1,10 +1,13 @@
-from fastapi import Depends, FastAPI, HTTPException, status, Request, WebSocket, WebSocketDisconnect
+import json
+
+from fastapi import Depends, FastAPI, HTTPException, status, Request, WebSocket, WebSocketDisconnect, Query, Cookie
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
-from typing import Union
+from typing import Union, Optional
+from fast_firs_aid_server.ExceptionHandler import credentials_exception
 
 from fast_firs_aid_server import models, crud, schemas, mypassword
 from fast_firs_aid_server.database import SessionLocal, engine
@@ -23,17 +26,6 @@ async def TestCustomMiddleware(request: Request, call_next):
 
     response = await call_next(request)
     return response
-# async def log_request_info(request: Request):
-#     print(request.headers)
-#     request_body = await request.json()
-#     logger.info(
-#         f"{request.method} request to {request.url} metadata\n"
-#         f"\tHeaders: {request.headers}\n"
-#         f"\tBody: {request_body}\n"
-#         f"\tPath Params: {request.path_params}\n"
-#         f"\tQuery Params: {request.query_params}\n"
-#         f"\tCookies: {request.cookies}\n"
-#     )
 
 
 # Dependency
@@ -76,16 +68,11 @@ def create_access_token(data: dict, expires_delta: Union[timedelta, None] = None
 
 
 async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
     try:
         payload = jwt.decode(token, mypassword.SECRET_KEY, algorithms=[mypassword.ALGORITHM])
         username: str = payload.get("sub")
         if username is None:
-            raise credentials_exception
+            raise
         token_data = schemas.TokenData(username=username)
     except JWTError:
         raise credentials_exception
@@ -113,11 +100,7 @@ def create_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
     user = authenticate_user_by_phone_number(db, form_data.username, form_data.password)
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise credentials_exception
     access_token_expires = timedelta(minutes=mypassword.ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
         data={"sub": user.phone_number}, expires_delta=access_token_expires
@@ -184,7 +167,9 @@ class ConnectionManager:
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.append(websocket)
-
+    def close(self, websocket: WebSocket):
+        websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        self.active_connections.remove(websocket)
     def disconnect(self, websocket: WebSocket):
         self.active_connections.remove(websocket)
 
@@ -204,31 +189,36 @@ html = """
     </head>
     <body>
         <h1>WebSocket Chat</h1>
-        <h2>Your ID: <span id="ws-id"></span></h2>
         <form action="" onsubmit="sendMessage(event)">
-            <input type="text" id="messageText" autocomplete="off"/>
-            <button>Send</button>
+           <label>Token: <input type="text" id="token" autocomplete="off" value="some-key-token"/></label>
+            <button onclick="connect(event)">链接</button>
+            <hr>
+            <label>消息: <input type="text" id="messageText" autocomplete="off"/></label>
+            <button>发送</button>
         </form>
         <ul id='messages'>
         </ul>
         <script>
-            var client_id = Date.now()
-            document.querySelector("#ws-id").textContent = client_id;
-            var ws = new WebSocket(`ws://10.27.132.158:8012/ws/${client_id}`);
-            ws.onmessage = function(event) {
-                var messages = document.getElementById('messages')
-                var message = document.createElement('li')
-                var content = document.createTextNode(event.data)
-                message.appendChild(content)
-                messages.appendChild(message)
-            };
+        var ws = null;
+            function connect(event) {
+                var token = document.getElementById("token")
+                ws = new WebSocket("ws://10.27.132.158:8012/ws/user/location?token=" + token.value);
+                ws.onmessage = function(event) {
+                    var messages = document.getElementById('messages')
+                    var message = document.createElement('li')
+                    var content = document.createTextNode(event.data)
+                    message.appendChild(content)
+                    messages.appendChild(message)
+                };
+                event.preventDefault()
+            }
             function sendMessage(event) {
                 var input = document.getElementById("messageText")
                 ws.send(input.value)
                 input.value = ''
                 event.preventDefault()
             }
-        </script>
+</script>
     </body>
 </html>
 """
@@ -241,20 +231,50 @@ async def get():
 manager = ConnectionManager()
 
 
-@app.websocket("/ws/{client_id}")
-async def websocket_endpoint(websocket: WebSocket, client_id: int):
+async def get_cookie_or_token(
+    websocket: WebSocket,
+    session: Optional[str] = Cookie(None),
+    token: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+
+    try:
+        print(token)
+        payload = jwt.decode(token, mypassword.SECRET_KEY, algorithms=[mypassword.ALGORITHM])
+        username: str = payload.get("sub")
+        print(username)
+        if username is None:
+            raise credentials_exception
+        token_data = schemas.TokenData(username=username)
+    except JWTError:
+        raise credentials_exception
+    user = crud.get_user_by_phone_number(db=db, phone_number=token_data.username)
+    if user is None or user.disabled == True:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+    return user
+
+@app.get("/location_test/", response_model=list[schemas.LocationItem])
+async def test_getlocation(db: Session = Depends(get_db)):
+    return crud.get_unique_users_location(db,time_delta=600)
+
+
+
+# TODO 加密
+@app.websocket("/ws/user/location")
+async def websocket_endpoint(websocket: WebSocket, current_active_user: schemas.User = Depends(get_cookie_or_token),
+                             db: Session = Depends(get_db)):
     await manager.connect(websocket)
-    # current_user = crud.get_user(db=get_db(),user_id=user_id)
-    # print(current_user)
-    # if current_user is None:
-    #     return
     try:
         while True:
             data = await websocket.receive_text()
+            loc_data :dict = json.loads(data)
+            if loc_data.get("errorCode",-1) == 0:
+                crud.create_location_item(db,current_active_user,loc_data.get("lon",0),loc_data.get("lat",0))
             await manager.send_personal_message(f"You wrote: {data}", websocket)
-            await manager.broadcast(f"Client #{client_id} says: {data}")
+            print(loc_data)
+            await manager.broadcast(f"Client {current_active_user.phone_number}  says: {data}")
     except WebSocketDisconnect:
         manager.disconnect(websocket)
-        await manager.broadcast(f"Client #{client_id} left the chat")
+        await manager.broadcast(f"Client left the chat")
 
 # app.include_router(api_router, dependencies=[Depends(log_request_info)])
