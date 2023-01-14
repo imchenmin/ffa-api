@@ -74,7 +74,6 @@ def create_location_item(db: Session, user: schemas.User, lon: float, lat:float)
 查询地理位置，获取一定时间内的用户的位置信息。每一个用户只显示一个
 """
 def get_unique_users_location(db: Session, time_delta=5):
-    # 也不知道怎么写的
     rownb = func.row_number().over(order_by=models.LocationItem.time_created.desc()
                                    , partition_by=models.LocationItem.user_id)
     rownb = rownb.label('rownb')
@@ -86,9 +85,10 @@ def get_unique_users_location(db: Session, time_delta=5):
         .filter(models.LocationItem.time_created >= datetime.utcnow() - timedelta(minutes=time_delta))\
         .all()
     # return db.query(models.LocationItem)\
-    #     .filter(models.LocationItem.time_created >= datetime.utcnow() - timedelta(minutes=time_delta))\
-    #     .group_by(models.LocationItem.user_id)\
-    #     .order_by(models.LocationItem.time_created).all()
+    #     .filter(models.LocationItem.time_created >= datetime.utcnow() - timedelta(minutes=time_delta)) \
+    #     .group_by(models.LocationItem.user_id) \
+    #     .order_by(models.LocationItem.time_created.asc()) \
+    #     .all()
 
 def get_all_user_location(db: Session):
     return db.query(models.LocationItem).order_by(models.LocationItem.time_created).limit(20).all()

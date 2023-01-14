@@ -9,3 +9,7 @@ python-multipart
 passlib[bcrypt]
 psycopg2
 websockets
+
+geopy
+pandas
+requests

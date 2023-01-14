@@ -67,7 +67,6 @@ class ResponseItem(ResponseBase):
 class AidItemBase(BaseModel):
     aid_type: str
     description: Union[str, None] = None
-    call_datetime: datetime.datetime
 
 
 class AidItemCreate(AidItemBase):
@@ -77,6 +76,7 @@ class AidItemCreate(AidItemBase):
 class AidItem(AidItemBase):
     id: int
     initiator_id: int
+    call_datetime: datetime.datetime
     # initiator: list[User] = []
     response_items: list[ResponseItem] = []
 
@@ -91,6 +91,8 @@ class LocationItem(BaseModel):
     lat: float
 
     time_created: datetime.datetime
+
+
 
     class Config:
         orm_mode = True
