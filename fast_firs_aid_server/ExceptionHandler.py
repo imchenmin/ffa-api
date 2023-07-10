@@ -10,3 +10,4 @@ websocket_exception = HTTPException(
     detail="Could not handle multiply connection for the same user",
     headers={"WWW-Authenticate": "Bearer"},
 )
+# TODO 将所有的异常处理写到这里

@@ -13,7 +13,7 @@ import copy
 from solver.vlt import vlt_select
 from solver.vlt import vlt_update
 
-def solver(destination, response, number = 3, threshold = 100):
+def solver(destination, response, number = 3, threshold = 10):
     """
      #e.g. destination = [114.000591,22.598331]  是求救人的location，分别是求救人的经度，维度,
     #number = 3 派遣志愿者人数，可以是大于等于1的整数，以number = 3 为例，
@@ -59,7 +59,7 @@ def solver(destination, response, number = 3, threshold = 100):
     """
     policy_dict = {}
     for vlt in response:
-        policy_dict[vlt['id']] = data_regulation([vlt['lon'],vlt['lat']], [114.00076,22.59961])
+        policy_dict[vlt['id']] = data_regulation([vlt['lon'],vlt['lat']], destination)
 
     policy_dist = {}
     for ID,data in policy_dict.items():

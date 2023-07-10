@@ -22,7 +22,7 @@ def data_regulation(origin,destination):
     html=requests.get(url.format(O,D)).text
     js=json.loads(html)
     policylist = []
-    print(js)
+    print("js",js)
     for path in js['route']['paths']:
         d = path['distance']
         steps = path['steps']

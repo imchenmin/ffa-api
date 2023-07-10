@@ -15,22 +15,25 @@ from fast_firs_aid_server import models, crud, schemas, mypassword
 from fast_firs_aid_server.database import SessionLocal, engine
 
 from solver.solver import solver
+from fast_firs_aid_server import phone
+from itsdangerous import TimestampSigner
+from fast_firs_aid_server import config_server
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 models.Base.metadata.create_all(bind=engine)
 app = FastAPI()
 
+phone_auth = phone.PhoneAuthenticator(config_server.config.get('SMS_RATE_LIMIT_SECS', 30))
+phone_signer = TimestampSigner(
+    config_server.config['SECRET_KEY'],
+    'st_hearing.views.phone_signer',
+)
 
-# sio = socketio.AsyncServer(async_mode='asgi')
-# # app绑定socketio
-# app.mount('/', socketio.ASGIApp(socketio_server=sio))  # 使用默认的socket path
 
 @app.middleware("http")
 async def TestCustomMiddleware(request: Request, call_next):
     the_headers = request.headers
-
-
     response = await call_next(request)
     return response
 
@@ -53,7 +56,6 @@ def authenticate_user_by_id(db, user_id: str, password: str):
     return user
 
 
-# TODO
 def authenticate_user_by_phone_number(db, phone_number: str, password: str):
     user = crud.get_user_by_phone_number(db, phone_number=phone_number)
     if not user:
@@ -95,16 +97,32 @@ async def get_current_active_user(current_user: schemas.User = Depends(get_curre
     return current_user
 
 
-@app.post("/users/", response_model=schemas.User)
-def create_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
-    db_user = crud.get_user_by_email(db, email=user.email)
+@app.post("/user")
+def create_user(user: schemas.UserCreate, otp_code: int, db: Session = Depends(get_db)):
+    db_user = crud.get_user_by_phone_number(db, phone_number=user.phone_number)
     if db_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    return crud.create_user(db=db, user=user)
+        raise HTTPException(status_code=400, detail="Phone number already registered")
+    try:
+        if len(user.phone_number) != 11 or not user.phone_number.isdigit():
+            raise HTTPException(status_code=400, detail="手机号必须为11位数字")
+        elif not phone_auth.verify(user.phone_number, str(otp_code)):
+            print("error 验证码")
+            raise HTTPException(status_code=400, detail="手机验证码不正确")
+        else:
+            crud.create_user(db=db, user=user)
+            raise HTTPException(status_code=200, detail="用户创建完成")
+    except phone.RateLimit as err:
+        raise HTTPException(status_code=400, detail="发送短信请求过于频繁")
 
 
 @app.post("/token", response_model=schemas.Token)
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    """
+    登录接口，使用电话号码。\n
+    :param form_data:
+    :param db:
+    :return:
+    """
     user = authenticate_user_by_phone_number(db, form_data.username, form_data.password)
     if not user:
         raise credentials_exception
@@ -115,7 +133,7 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
     return {"access_token": access_token, "token_type": "bearer"}
 
 
-@app.get("/users/me/", response_model=schemas.User)
+@app.get("/user/me/", response_model=schemas.User)
 async def read_users_me(current_user: schemas.User = Depends(get_current_active_user)):
     return current_user
 
@@ -127,6 +145,14 @@ async def read_own_items(current_user: schemas.User = Depends(get_current_active
 
 @app.get("/users/", response_model=list[schemas.User])
 def read_users(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    """
+    TODO 测试接口，在实际使用的情况下一定要禁掉
+
+    :param skip:
+    :param limit:
+    :param db:
+    :return:
+    """
     users = crud.get_users(db, skip=skip, limit=limit)
     return users
 
@@ -139,23 +165,30 @@ def read_user(user_id: int, db: Session = Depends(get_db)):
     return db_user
 
 
-@app.post("/users/{user_id}/items/", response_model=schemas.Item)
-def create_item_for_user(
-        user_id: int, item: schemas.ItemCreate, db: Session = Depends(get_db)
-):
-    return crud.create_user_item(db=db, item=item, user_id=user_id)
+@app.post("/user/getotp")
+def get_phone_otp_wrapper(phone_form: schemas.OtpCodeItem):
+    """TODO getotp不是很符合rest标准
+    """
+    # 执行手机号获取方法体
+    phone_number = phone_form.telephone
+    phone_number = str(phone_number)
+    return get_phone_otp(phone_number)
 
 
-@app.get("/items/", response_model=list[schemas.Item])
-def read_items(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    items = crud.get_items(db, skip=skip, limit=limit)
-    print(items)
-    return items
+def get_phone_otp(phone_number):
+    try:
+        if len(phone_number) != 11:
+            raise HTTPException(status_code=400, detail="手机号必须为11位")
+        else:
+            phone_auth.send(phone_number)  # TODO: 当前为空消息 745170
+            raise HTTPException(status_code=200, detail="完成")
+    except phone.RateLimit as err:
+        raise HTTPException(status_code=400, detail="发送短信请求过于频繁")
 
 
-# TODO 添加只有本人能看到
 @app.get("/users/{user_id}/aid_items/", response_model=list[schemas.AidItem])
 def read_items(user_id: int, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    # TODO 添加只有本人能看到
     items = crud.get_aid_items_by_initiator_id(db, initiator_id=user_id, skip=skip, limit=limit)
     return items
 
@@ -215,6 +248,7 @@ class ConnectionManager:
         pass
 
 
+# for test
 html = """
 <!DOCTYPE html>
 <html>
@@ -298,7 +332,7 @@ def handle_location(current_active_user: schemas.User, db: Session, loc_data: di
 
 
 # , response_model=schemas.AidItem
-@app.post("/first_aid/")
+@app.post("/first_aid/", response_model=schemas.AidItem)
 async def create_firstaid_item(aid_item: schemas.AidItemCreate,
                                current_user: schemas.User = Depends(get_current_active_user),
                                db: Session = Depends(get_db)):
@@ -329,11 +363,15 @@ async def create_firstaid_item(aid_item: schemas.AidItemCreate,
     response = []
     for item in location_items:
         path_user[item.user_id] = {'lon': item.lon, 'lat': item.lat}
-        response.append({'lon': item.lon, 'lat': item.lat, 'id': item.user_id})
+        if item.user_id != current_user.id:
+            response.append({'lon': item.lon, 'lat': item.lat, 'id': item.user_id})
     current_user_location = path_user[current_user.id]
-    end_point = [current_user_location['lon'],current_user_location['lat']]
+    end_point = [current_user_location['lon'], current_user_location['lat']]
 
-    path_dict: dict = solver(end_point, response) # 算法入口
+    path_dict: dict = solver(end_point, response, number=2)  # 算法入口
+    aid_item = crud.create_user_aid_item(db, aid_item, current_user.id)
+    # path_dict.pop(current_user.id)
+    print("current user", current_user.phone_number)
     for user_id in path_dict.keys():
         print("active_connections_user_ids", manager.active_connections_user_ids)
         if user_id in manager.active_connections_user_ids:
@@ -341,92 +379,25 @@ async def create_firstaid_item(aid_item: schemas.AidItemCreate,
             idx: int = manager.active_connections_user_ids.index(user_id)
             if current_user.id == user_id:
                 # 不给自己发请求
+                print("is self\n")
                 continue
             websocket = manager.active_connections[idx]
             response_dict = dict()
             response_dict['route'] = path_dict[user_id]
             response_dict['type'] = "first_aid_request"
+            response_dict['room_id'] = "first_aid_room_" + str(aid_item.id)
             response_dict['request_datetime'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             response_user = path_user[user_id]
             response_dict['start_point'] = [response_user['lon'], response_user['lat']]
             response_dict['end_point'] = end_point
             print(response_dict)
             await manager.send_personal_message_json(jsonable_encoder(response_dict), websocket)
-            # await manager.broadcast(f"Clinet {user_id} received first_aid_request")
 
             print(user_id)
-    print(path_dict)
-    return JSONResponse(json.dumps(path_dict))
-    # return crud.create_user_aid_item(db, aid_item, current_user.id)
+    # aid_item['room_id'] = "first_aid_room_" + str(aid_item.id)
 
-
-
-@app.get("/solver/")
-async def solver_test(db: Session = Depends(get_db)):
-    location_items: list[schemas.LocationItem] = crud.get_unique_users_location(db, time_delta=60000)
-    # location_items = [{"id": item.user_id, "lon": item.lon, 'lat': item.lat} for item in location_items]
-    path_user = dict()
-    response = []
-    for item in location_items:
-        path_user[item.user_id] = {'lon': item.lon, 'lat': item.lat}
-        response.append({'lon': item.lon, 'lat': item.lat, 'id': item.user_id})
-    end_point = [114.000591, 22.598331]
-    response = [
-        {
-            "id": 1,
-            "lon": 114.002946,
-            "lat": 22.601137  # 松禾体育场
-        },
-        {
-            "id": 2,
-            "lon": 114.002451,
-            "lat": 22.599728  # 教师公寓4号楼
-        },
-        {
-            "id": 42,
-            "lon": 113.995814,
-            "lat": 22.594767  # 台州楼
-        },
-        {
-            "id": 25,
-            "lon": 113.998378,
-            "lat": 22.595084  # 琳恩图书馆
-        },
-        {
-            "id": 37,
-            "lon": 114.00076,
-            "lat": 22.595252  # 商学院
-        },
-        {
-            "id": 72,
-            "lon": 113.995653,
-            "lat": 22.59961  # 工学院大楼
-        }
-    ]
-    path_dict: dict = solver(end_point, response)
-    print(path_dict)
-    for user_id in path_dict.keys():
-        print("active_connections_user_ids", manager.active_connections_user_ids)
-        if user_id in manager.active_connections_user_ids:
-            print("userid", user_id)
-            idx: int = manager.active_connections_user_ids.index(user_id)
-            websocket = manager.active_connections[idx]
-            response_dict = dict()
-            response_dict['route'] = path_dict[user_id]
-            response_dict['type'] = "first_aid_request"
-            response_dict['request_datetime'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            response_user = path_user[user_id]
-            response_dict['start_point'] = [response_user['lon'], response_user['lat']]
-            response_dict['end_point'] = end_point
-            print(response_dict['route'])
-            print("non", json.dumps(response_dict))
-            await manager.send_personal_message_json(jsonable_encoder(response_dict), websocket)
-            # await manager.broadcast(f"Clinet {user_id} received first_aid_request")
-
-            print(user_id)
-    print(path_dict)
-    return JSONResponse(json.dumps(path_dict))
-
+    print(aid_item)
+    return aid_item
 
 def handle_confirm(current_active_user: schemas.User, db: Session, loc_data: dict):
     pass
@@ -446,6 +417,7 @@ async def websocket_endpoint(websocket: WebSocket, current_active_user: schemas.
             # if not json_data.get("errorCode",-1) == 0:
             #     continue
             if msg_type == "location":
+                print("handle location")
                 handle_location(current_active_user, db, json_data)
             elif msg_type == "accept_request":
                 # 确认帮助请求

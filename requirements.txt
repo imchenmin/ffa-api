@@ -13,3 +13,4 @@ websockets
 geopy
 pandas
 requests
+itsdangerous
